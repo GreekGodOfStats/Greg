@@ -1,5 +1,3 @@
--- B. Join with position records
-                           -- 1. Clean asterisks from names in position table
 --Clear the deck to run code
 DROP TABLE
 	totals_2,
@@ -152,6 +150,44 @@ UPDATE all_totals SET Player = 'Angel Delgado' WHERE Player = 'Ángel Delgado';
 UPDATE all_totals SET Player = 'Ante Zizic' WHERE Player = 'Ante Žižić';
 UPDATE all_totals SET Player = 'Kiwane Garris' WHERE Player = 'Kiwane Lemorris Garris';
 
+--Handle players who have short names
+ALTER TABLE master_player ADD col varchar(50);
+UPDATE master_player 
+	SET col = SUBSTRING(bbref_player_link,12,8)
+	WHERE LEN(bbref_player_link) = 24;
+UPDATE master_player 
+	SET col = SUBSTRING(bbref_player_link,12,7)
+	WHERE LEN(bbref_player_link) = 23;
+UPDATE master_player 
+	SET col = SUBSTRING(bbref_player_link,12,6)
+	WHERE LEN(bbref_player_link) = 22;
+UPDATE master_player 
+	SET col = SUBSTRING(bbref_player_link,12,5)
+	WHERE LEN(bbref_player_link) = 21;
+
+WITH subtable AS (
+SELECT 
+	SUBSTRING(bbref_player_link,12,9) as bbrefid,
+	last_year AS height,
+	player_id AS player_name,
+	position AS nba_id_number,
+	rookie_year AS simple_position,
+	col,
+	ROW_NUMBER () OVER (PARTITION BY bbref_player_link ORDER BY bbref_player_link) AS uniquerow
+FROM master_player
+)
+SELECT 
+	* INTO player_master_2
+FROM subtable
+;
+
+UPDATE 
+	player_master_2
+	SET bbrefid = col 
+	WHERE bbrefid != col
+;
+
+--Clean totals from bbref
 WITH bbref AS (
 SELECT
 	uniqueid,
@@ -294,6 +330,28 @@ FROM
 	t2
 ;
 
+WITH adjust AS (
+SELECT 
+	bbrefid,
+	height,
+	player_name,
+	nba_id_number,
+	simple_position,
+	col,
+	uniquerow
+FROM player_master_2
+)
+SELECT 
+	* INTO bbref_totals_3
+FROM 
+	bbref_totals_2 
+LEFT JOIN 
+	adjust 
+	ON bbref_id = bbrefid
+;
+
+UPDATE bbref_totals_3 SET nba_id = nba_id_number WHERE nba_id = '' AND nba_id_number IS NOT NULL;
+
 --Deduplicate nba dot com totals
 WITH deduplicater AS (
 SELECT 
@@ -337,63 +395,83 @@ WHERE
 	record = 1
 ;
 
+WITH adjust AS (
+SELECT 
+	bbrefid AS bbref_id_num,
+	height AS ht,
+	player_name AS name,
+	nba_id_number AS nba_id_num,
+	simple_position AS simpleposition,
+	col AS col_,
+	uniquerow AS ur
+FROM player_master_2
+)
+SELECT 
+	* INTO totals_3
+FROM 
+	totals_2 
+LEFT JOIN 
+	adjust 
+	ON PLAYER_ID = nba_id_num
+;
 --Extract records for players with more than one team in a season, ommitted from totals,totals_2 (nba dot com) 
-SELECT
-	* INTO multi_team_players
+SELECT 
+	* INTO unjoined_players
 FROM
-	bbref_totals_2
+	bbref_totals_3
 	LEFT JOIN
-		totals_2
-	ON 
+		totals_3
+	ON
 		SUBSTRING(SeasonID,3,2) = SUBSTRING(Season,6,2)
-		AND CAST(points AS int) = CAST(PTS AS int)
-		AND Tm = TEAM
-		AND
-		CASE 
-		WHEN playername = PLAYER
-		THEN 1
-		WHEN playername != PLAYER
-		AND SUBSTRING(playername,1,2) = SUBSTRING(bbref_id,6,2)
-		AND CAST(G AS int) = CAST(GP AS int)
-		AND CAST(points AS int) = CAST(PTS AS int)
-		AND CAST(totalrebounds AS int) = CAST(REB AS int)
-		AND CAST(assists AS int) = CAST(AST AS int)
-		AND CAST(fouls AS int) = CAST(PF AS int)
-		THEN 1
-		ELSE 0 
-		END = 1
-
-WHERE 
-	PLAYER IS NULL
+		AND CASE
+			WHEN nba_id = PLAYER_ID
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id = bbref_id_num
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id != bbref_id_num
+			AND playername = PLAYER
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id != bbref_id_num
+			AND playername != PLAYER
+			AND playername = name
+			AND CAST(points AS int) = CAST(PTS AS int)
+			THEN 1
+			ELSE 0 
+			END = 1
+WHERE Season IS NULL
 ;
 
 --Cases where the join *did* work
-SELECT
+SELECT 
 	* INTO joined_totals
 FROM
-	bbref_totals_2
+	bbref_totals_3
 	LEFT JOIN
-		totals_2
-	ON 
+		totals_3
+	ON
 		SUBSTRING(SeasonID,3,2) = SUBSTRING(Season,6,2)
-		AND CAST(points AS int) = CAST(PTS AS int)
-		AND
-		CASE 
-		WHEN playername = PLAYER
-		THEN 1
-		WHEN playername != PLAYER
-		AND SUBSTRING(Player,1,2) = SUBSTRING(bbref_id,6,2)
-		AND CAST(G AS int) = CAST(GP AS int)
-		AND CAST(points AS int) = CAST(PTS AS int)
-		AND CAST(totalrebounds AS int) = CAST(REB AS int)
-		AND CAST(assists AS int) = CAST(AST AS int)
-		AND CAST(fouls AS int) = CAST(PF AS int)
-		THEN 1
-		ELSE 0 
-		END = 1
-
-WHERE 
-	PLAYER IS NOT NULL
+		AND CASE
+			WHEN nba_id = PLAYER_ID
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id = bbref_id_num
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id != bbref_id_num
+			AND playername = PLAYER
+			THEN 1
+			WHEN nba_id != PLAYER_ID
+			AND bbref_id != bbref_id_num
+			AND playername != PLAYER
+			AND playername = name
+			AND CAST(points AS int) = CAST(PTS AS int)
+			THEN 1
+			ELSE 0 
+			END = 1
+WHERE Season IS NOT NULL
 ;
 
 --Adding records for players ommitted from nba dot com due to playing for more than one team in a season
@@ -425,7 +503,7 @@ SELECT
 	points AS PTS,
 	COUNT(Tm) OVER (PARTITION BY playername,SeasonID ORDER BY playername) AS numberofteams 
 FROM 
-	multi_team_players
+	unjoined_players
 )
 SELECT 
 	* INTO
@@ -497,7 +575,7 @@ SELECT
 	points AS PTS,
 	COUNT(Tm) OVER (PARTITION BY playername,SeasonID ORDER BY playername) AS numberofteams 
 FROM 
-	multi_team_players
+	unjoined_players
 )
 SELECT 
 	* INTO
@@ -582,62 +660,14 @@ WHERE
 UPDATE 
 	joined_totals_3
 SET 
-	Season = '2019-20'
+	Season = '20'+ (CONVERT(varchar,((CONVERT(int,Season))-2001)) + '-' + SUBSTRING(Season,3,2))
 WHERE 
-	Season = '2020'
+	Season LIKE '202_'
 ;
 
-WITH dict AS (
-SELECT 
-	playername,
-	bbref_id,
-	PLAYER,
-	PLAYER_ID,
-	ROW_NUMBER() OVER (PARTITION BY playername,bbref_id,PLAYER,PLAYER_ID ORDER BY playername) AS u_row
-FROM
-	joined_totals_3
-WHERE 
-	PLAYER_ID != ''
-)
-SELECT 
-	* INTO player_id_dict
-FROM 
-	dict
-WHERE 
-	u_row = 1
-;
-
-WITH rename AS (
-SELECT
-	playername AS br_name,
-	bbref_id AS br_id,
-	PLAYER AS nbaname,
-	PLAYER_ID AS nbaid
-FROM
-	player_id_dict
-)
-SELECT
-	* INTO joined_totals_4
-FROM
-	joined_totals_3
-LEFT JOIN
-	rename
-	ON bbref_id = br_id
-	OR PLAYER_ID = nbaid
-;
-
-DROP TABLE
-	totals_2,
-	bbref_totals,
-	bbref_totals_2,
-	joined_totals,
-	joined_totals_2,
-	joined_totals_3,
-	multi_team_players
-;
-                              -- 2. Clean position labels
+--Clean position labels
 -----------------------------------------------------------------------------------------------------------------------------------------------
-ALTER TABLE NBA_historical.dbo.joined_totals_4 ADD realposition AS 
+ALTER TABLE NBA_historical.dbo.joined_totals_3 ADD realposition AS 
 (
    CASE
       WHEN
@@ -716,4 +746,91 @@ ALTER TABLE NBA_historical.dbo.joined_totals_4 ADD realposition AS
          position 
    END
 )
+;
+
+WITH dict AS (
+SELECT 
+	playername,
+	bbref_id,
+	PLAYER,
+	PLAYER_ID,
+	realposition,
+	ROW_NUMBER() OVER (PARTITION BY playername,bbref_id,PLAYER,PLAYER_ID ORDER BY playername) AS u_row
+FROM
+	joined_totals_3
+WHERE 
+	PLAYER_ID != ''
+)
+SELECT 
+	* INTO player_id_dict
+FROM 
+	dict
+WHERE 
+	u_row = 1
+;
+
+
+WITH rename AS (
+SELECT
+	playername AS br_name,
+	bbref_id AS br_id,
+	PLAYER AS nbaname,
+	PLAYER_ID AS nbaid,
+	realposition AS real_position
+FROM
+	player_id_dict
+)
+SELECT
+	* INTO joined_totals_4
+FROM
+	joined_totals_3
+LEFT JOIN
+	rename
+	ON bbref_id = br_id
+	OR CASE
+		WHEN bbref_id != br_id
+			AND PLAYER_ID = nbaid
+		THEN 1
+		WHEN bbref_id != br_id
+			AND PLAYER_ID = ''
+			AND playername = br_name
+				OR PLAYER = nbaname
+		THEN 1
+		ELSE 0
+		END = 1
+;
+UPDATE 
+	joined_totals_4 
+SET PLAYER_ID = nbaid
+WHERE PLAYER_ID = '' AND nbaid IS NOT NULL
+;
+
+WITH slice AS (
+	SELECT 
+		Name,
+		ID,
+		realposition,
+		ROW_NUMBER() OVER (PARTITION BY Name,ID ORDER BY SeasonID) AS uniques
+	FROM
+		deduped_ids
+)
+SELECT 
+	* INTO single_position
+FROM
+	slice
+WHERE
+	uniques = 1
+;
+
+DROP TABLE
+	totals_2,
+	totals_3,
+	bbref_totals,
+	bbref_totals_2,
+	bbref_totals_3,
+	joined_totals,
+	joined_totals_2,
+	joined_totals_3,
+	unjoined_players,
+	player_master_2
 ;
